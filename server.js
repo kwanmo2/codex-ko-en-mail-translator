@@ -10,9 +10,22 @@ const MAX_TEXT_LENGTH = 8000;
 const MAX_BODY_BYTES = 128 * 1024;
 const CODEX_TIMEOUT_MS = 60_000;
 const CODEX_STATUS_TIMEOUT_MS = 10_000;
+const AUTH_STATUS_CACHE_MS = 30_000;
 const CODEX_MODEL = process.env.CODEX_MODEL || "gpt-5.4";
 
 const PUBLIC_DIR = path.join(__dirname, "public");
+const PROMPTS_DIR = path.join(__dirname, "prompts");
+const promptTemplateCache = new Map();
+const authStatusCache = new Map();
+
+const TONE_INSTRUCTIONS = {
+  polite: "Use a polite, professional business tone.",
+  concise: "Make the wording concise and direct while remaining professional.",
+  friendly: "Use a warm, approachable business tone without becoming casual.",
+  firm: "Use a clear, firm business tone suitable for requests or follow-ups.",
+  apology: "Use a considerate tone suitable for apologies, delays, or requests for understanding.",
+  followup: "Use a courteous follow-up tone that gently prompts the recipient to respond."
+};
 
 function getCodexCommandName(platform = process.platform, env = process.env) {
   if (env.CODEX_BIN) {
@@ -98,9 +111,10 @@ function runCodex(codexArgs, options = {}) {
 }
 
 function detectLanguages(text) {
-  const hasKorean = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/u.test(text);
+  const koreanCount = (text.match(/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/gu) || []).length;
+  const englishCount = (text.match(/[A-Za-z]/g) || []).length;
 
-  if (hasKorean) {
+  if (koreanCount > englishCount) {
     return {
       sourceLanguage: "Korean",
       targetLanguage: "English",
@@ -146,50 +160,78 @@ function validateRequestText(value, label = "처리할 이메일 내용을 입�
   return validation;
 }
 
-function buildTranslationPrompt(text) {
-  const { sourceLanguage, targetLanguage } = detectLanguages(text);
+function loadPromptTemplate(name) {
+  if (!promptTemplateCache.has(name)) {
+    promptTemplateCache.set(name, fs.readFileSync(path.join(PROMPTS_DIR, `${name}.md`), "utf8"));
+  }
 
-  return [
-    "You are a professional business email translator.",
-    `Translate the following ${sourceLanguage} business email into ${targetLanguage}.`,
-    "",
-    "Rules:",
-    "- Produce a polite, natural business email translation.",
-    "- Preserve names, company names, product names, numbers, dates, email addresses, and URLs.",
-    "- Preserve the original subject line, greeting, paragraph breaks, and signature layout when possible.",
-    "- Do not add explanations, alternatives, comments, markdown fences, or labels.",
-    "- Output only the translated email text.",
-    "",
-    "Korean reference requirements:",
-    "- This is for 비즈니스 이메일 translation.",
-    "- 번역문만 출력.",
-    "",
-    "Email to translate:",
-    text
-  ].join("\n");
+  return promptTemplateCache.get(name);
 }
 
-function buildPolishPrompt(text) {
-  return [
-    "You are a professional business English editor.",
-    "Rewrite the following English business email so it sounds natural, polished, and appropriate for professional business communication.",
-    "",
-    "Rules:",
-    "- Preserve the original meaning, facts, names, company names, product names, numbers, dates, email addresses, and URLs.",
-    "- Improve grammar, clarity, tone, flow, and word choice.",
-    "- Keep the message polite, concise, and natural for business email.",
-    "- Preserve the original subject line, greeting, paragraph breaks, and signature layout when possible.",
-    "- Do not make the email unnecessarily longer.",
-    "- Do not add explanations, change summaries, comments, markdown fences, or labels.",
-    "- Output only the improved email text.",
-    "",
-    "Korean reference requirements:",
-    "- 이미 작성한 영어 메일을 더 자연스럽고 비즈니스에 어울리는 영어 표현으로 다듬기.",
-    "- 결과 이메일만 출력.",
-    "",
-    "Email to improve:",
+function toneInstructionFor(tone) {
+  return TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.polite;
+}
+
+function formatPhraseRules(phraseRules) {
+  if (!Array.isArray(phraseRules)) {
+    return "No custom phrase preferences were provided.";
+  }
+
+  const rules = phraseRules
+    .map((rule) => ({
+      avoid: typeof rule.avoid === "string" ? rule.avoid.trim() : "",
+      prefer: typeof rule.prefer === "string" ? rule.prefer.trim() : ""
+    }))
+    .filter((rule) => rule.avoid || rule.prefer)
+    .slice(0, 20);
+
+  if (rules.length === 0) {
+    return "No custom phrase preferences were provided.";
+  }
+
+  return rules
+    .map((rule, index) => `${index + 1}. Avoid: ${rule.avoid || "(not specified)"} | Prefer: ${rule.prefer || "(not specified)"}`)
+    .join("\n");
+}
+
+function renderPromptTemplate(name, values) {
+  const template = loadPromptTemplate(name);
+
+  return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => {
+    if (Object.prototype.hasOwnProperty.call(values, key)) {
+      return values[key];
+    }
+
+    return match;
+  });
+}
+
+function buildTranslationPrompt(text, options = {}) {
+  const { sourceLanguage, targetLanguage } = detectLanguages(text);
+
+  return renderPromptTemplate("translate", {
+    sourceLanguage,
+    targetLanguage,
+    toneInstruction: toneInstructionFor(options.tone),
+    phraseRules: formatPhraseRules(options.phraseRules),
     text
-  ].join("\n");
+  });
+}
+
+function buildPolishPrompt(text, options = {}) {
+  return renderPromptTemplate("polish", {
+    toneInstruction: toneInstructionFor(options.tone),
+    phraseRules: formatPhraseRules(options.phraseRules),
+    text
+  });
+}
+
+function buildComposePrompt(text, options = {}) {
+  return renderPromptTemplate("compose", {
+    toneInstruction: toneInstructionFor(options.tone),
+    phraseRules: formatPhraseRules(options.phraseRules),
+    text
+  });
 }
 
 function normalizeCodexOutput(stdout) {
@@ -248,9 +290,18 @@ async function getCodexAuthStatus(options = {}) {
   const platform = options.platform || process.platform;
   const env = options.env || process.env;
   const codexCommand = getCodexCommandName(platform, env);
+  const now = typeof options.now === "number" ? options.now : Date.now();
+  const cacheKey = `${platform}:${codexCommand}`;
+  const cached = authStatusCache.get(cacheKey);
+
+  if (options.useCache !== false && cached && cached.expiresAt > now) {
+    return cached.status;
+  }
+
+  const runCodexImpl = options.runCodexImpl || runCodex;
 
   try {
-    const result = await runCodex(["login", "status"], {
+    const result = await runCodexImpl(["login", "status"], {
       ...options,
       platform,
       env,
@@ -258,14 +309,27 @@ async function getCodexAuthStatus(options = {}) {
     });
     const parsed = parseLoginStatus(result.stdout, result.stderr);
 
-    return {
+    const status = {
       ...parsed,
       platform,
       codexCommand,
       instruction: parsed.loggedIn ? "" : loginInstruction(platform, codexCommand)
     };
+
+    if (status.loggedIn && options.useCache !== false) {
+      authStatusCache.set(cacheKey, {
+        expiresAt: now + AUTH_STATUS_CACHE_MS,
+        status
+      });
+    } else {
+      authStatusCache.delete(cacheKey);
+    }
+
+    return status;
   } catch (error) {
     const parsed = parseLoginStatus(error.stdout, error.stderr, error);
+
+    authStatusCache.delete(cacheKey);
 
     return {
       ...parsed,
@@ -274,6 +338,10 @@ async function getCodexAuthStatus(options = {}) {
       instruction: loginInstruction(platform, codexCommand)
     };
   }
+}
+
+function clearAuthStatusCache() {
+  authStatusCache.clear();
 }
 
 function friendlyCodexError(stderr, error) {
@@ -351,21 +419,30 @@ function runCodexPrompt(prompt, outputPrefix, timeoutMessage, emptyMessage) {
   });
 }
 
-function translateWithCodex(text) {
+function translateWithCodex(text, options = {}) {
   return runCodexPrompt(
-    buildTranslationPrompt(text),
+    buildTranslationPrompt(text, options),
     "translation",
     "번역 요청 시간이 초과되었습니다. 입력을 줄이거나 잠시 후 다시 시도해 주세요.",
     "Codex CLI가 빈 번역 결과를 반환했습니다."
   );
 }
 
-function polishWithCodex(text) {
+function polishWithCodex(text, options = {}) {
   return runCodexPrompt(
-    buildPolishPrompt(text),
+    buildPolishPrompt(text, options),
     "polish",
     "다듬기 요청 시간이 초과되었습니다. 입력을 줄이거나 잠시 후 다시 시도해 주세요.",
     "Codex CLI가 빈 다듬기 결과를 반환했습니다."
+  );
+}
+
+function composeWithCodex(text, options = {}) {
+  return runCodexPrompt(
+    buildComposePrompt(text, options),
+    "compose",
+    "작성 요청 시간이 초과되었습니다. 입력을 줄이거나 잠시 후 다시 시도해 주세요.",
+    "Codex CLI가 빈 작성 결과를 반환했습니다."
   );
 }
 
@@ -485,7 +562,10 @@ function createServer() {
         }
 
         const languages = detectLanguages(validation.text);
-        const translation = await translateWithCodex(validation.text);
+        const translation = await translateWithCodex(validation.text, {
+          tone: payload.tone,
+          phraseRules: payload.phraseRules
+        });
 
         sendJson(response, 200, {
           sourceLanguage: languages.sourceLanguage,
@@ -517,11 +597,45 @@ function createServer() {
           return;
         }
 
-        const result = await polishWithCodex(validation.text);
+        const result = await polishWithCodex(validation.text, {
+          tone: payload.tone,
+          phraseRules: payload.phraseRules
+        });
 
         sendJson(response, 200, { result });
       } catch (error) {
         const message = error && error.message ? error.message : "영문 다듬기 처리 중 오류가 발생했습니다.";
+        const status = /JSON|본문|입력|최대|text must/u.test(message) ? 400 : 500;
+        sendJson(response, status, { error: message });
+      }
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/compose") {
+      try {
+        const authStatus = await getCodexAuthStatus();
+
+        if (!authStatus.loggedIn) {
+          sendJson(response, 401, { error: `${authStatus.message} ${authStatus.instruction}`, auth: authStatus });
+          return;
+        }
+
+        const payload = await readJsonBody(request);
+        const validation = validateRequestText(payload.text, "작성할 이메일의 요점을 입력해 주세요.");
+
+        if (!validation.ok) {
+          sendJson(response, 400, { error: validation.message });
+          return;
+        }
+
+        const result = await composeWithCodex(validation.text, {
+          tone: payload.tone,
+          phraseRules: payload.phraseRules
+        });
+
+        sendJson(response, 200, { result });
+      } catch (error) {
+        const message = error && error.message ? error.message : "이메일 작성 처리 중 오류가 발생했습니다.";
         const status = /JSON|본문|입력|최대|text must/u.test(message) ? 400 : 500;
         sendJson(response, status, { error: message });
       }
@@ -548,18 +662,25 @@ if (require.main === module) {
 }
 
 module.exports = {
+  AUTH_STATUS_CACHE_MS,
   MAX_TEXT_LENGTH,
   buildCodexInvocation,
+  buildComposePrompt,
   buildPolishPrompt,
   buildTranslationPrompt,
+  clearAuthStatusCache,
+  composeWithCodex,
   createServer,
   detectLanguages,
+  formatPhraseRules,
   getCodexAuthStatus,
   getCodexCommandName,
   loginInstruction,
   normalizeCodexOutput,
   parseLoginStatus,
   polishWithCodex,
+  renderPromptTemplate,
+  toneInstructionFor,
   translateWithCodex,
   validateRequestText,
   validateText

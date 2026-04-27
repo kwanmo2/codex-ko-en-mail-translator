@@ -8,54 +8,123 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="workspace" aria-labelledby="app-title">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Codex Auth 로컬 도구</p>
-            <h1 id="app-title">비즈니스 이메일 도구</h1>
+      <div class="app-frame">
+        <section class="side-panel side-panel-left hidden" id="historyDrawer" aria-label="최근 작업 히스토리">
+          <div class="drawer-header">
+            <strong>최근 작업</strong>
+            <button class="secondary-button" id="clearHistory" type="button">비우기</button>
           </div>
-          <div class="header-status">
-            <div class="auth-status pending" id="authStatus" aria-live="polite">Codex Auth 확인 중...</div>
-            <div class="direction" id="direction" aria-live="polite">영어 -> 한국어</div>
-          </div>
-        </header>
+          <div id="historyList" class="history-list"></div>
+        </section>
 
-        <nav class="mode-tabs" aria-label="작업 선택">
-          <button class="tab-button active" id="translateTab" type="button" aria-pressed="true">번역</button>
-          <button class="tab-button" id="polishTab" type="button" aria-pressed="false">영문 다듬기</button>
-        </nav>
-
-        <div class="editor-grid">
-          <label class="panel">
-            <span class="panel-label" id="inputLabel">입력 이메일</span>
-            <textarea
-              id="inputText"
-              maxlength="8000"
-              placeholder="번역할 영어 또는 한국어 비즈니스 이메일을 입력하세요."
-              autofocus
-            ></textarea>
-          </label>
-
-          <section class="panel result-panel" aria-label="번역 결과">
-            <div class="result-header">
-              <span class="panel-label" id="resultLabel">번역 결과</span>
-              <button class="icon-button" id="copyButton" type="button" title="결과 복사" disabled>
-                <span aria-hidden="true">⧉</span>
-                <span class="sr-only">결과 복사</span>
+        <section class="workspace" aria-labelledby="app-title">
+          <header class="topbar">
+            <div class="topbar-title">
+              <button
+                class="panel-toggle panel-toggle-left"
+                id="historyToggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="historyDrawer"
+                title="히스토리 열기"
+              >
+                <span aria-hidden="true">↺</span>
+                <span class="sr-only">히스토리 열기</span>
+              </button>
+              <div>
+                <p class="eyebrow">Codex Auth 로컬 도구</p>
+                <h1 id="app-title">비즈니스 이메일 도구</h1>
+              </div>
+            </div>
+            <div class="topbar-tools">
+              <div class="header-status">
+                <div class="auth-status pending" id="authStatus" aria-live="polite">Codex Auth 확인 중...</div>
+                <div class="direction" id="direction" aria-live="polite">영어 -> 한국어</div>
+              </div>
+              <button
+                class="panel-toggle panel-toggle-right"
+                id="phraseToggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="phraseDrawer"
+                title="표현 사전 열기"
+              >
+                <span aria-hidden="true">✎</span>
+                <span class="sr-only">표현 사전 열기</span>
               </button>
             </div>
-            <output id="result" class="result" aria-live="polite"></output>
-          </section>
-        </div>
+          </header>
 
-        <footer class="actions">
-          <div class="status">
-            <span id="charCount">0 / 8,000</span>
-            <span id="statusText" role="status" aria-live="polite"></span>
+          <nav class="mode-tabs" aria-label="작업 선택">
+            <button class="tab-button active" id="translateTab" type="button" aria-pressed="true">번역</button>
+            <button class="tab-button" id="polishTab" type="button" aria-pressed="false">영문 다듬기</button>
+            <button class="tab-button" id="composeTab" type="button" aria-pressed="false">이메일 작성</button>
+          </nav>
+
+          <section class="options-bar" aria-label="작업 옵션">
+            <label class="field">
+              <span>톤</span>
+              <select id="toneSelect">
+                <option value="polite">정중함</option>
+                <option value="concise">간결함</option>
+                <option value="friendly">친근함</option>
+                <option value="firm">강한 요청</option>
+                <option value="apology">사과/양해</option>
+                <option value="followup">후속 리마인드</option>
+              </select>
+            </label>
+          </section>
+
+          <div class="editor-grid">
+            <label class="panel">
+              <span class="panel-label" id="inputLabel">입력 이메일</span>
+              <textarea
+                id="inputText"
+                maxlength="8000"
+                placeholder="번역할 영어 또는 한국어 비즈니스 이메일을 입력하세요."
+                autofocus
+              ></textarea>
+            </label>
+
+            <section class="panel result-panel" aria-label="번역 결과">
+              <div class="result-header">
+                <span class="panel-label" id="resultLabel">번역 결과</span>
+                <button class="icon-button" id="copyButton" type="button" title="결과 복사" disabled>
+                  <span aria-hidden="true">⧉</span>
+                  <span class="sr-only">결과 복사</span>
+                </button>
+              </div>
+              <output id="result" class="result" aria-live="polite"></output>
+              <section class="diff-panel hidden" id="diffPanel" aria-label="변경 강조">
+                <div class="diff-column">
+                  <span class="panel-label compact">원문 변경</span>
+                  <div class="diff-content" id="diffOriginal"></div>
+                </div>
+                <div class="diff-column">
+                  <span class="panel-label compact">결과 변경</span>
+                  <div class="diff-content" id="diffResult"></div>
+                </div>
+              </section>
+            </section>
           </div>
-          <button id="submitButton" class="primary-button" type="button">번역</button>
-        </footer>
-      </section>
+
+          <footer class="actions">
+            <div class="status">
+              <span id="charCount">0 / 8,000</span>
+              <span id="statusText" role="status" aria-live="polite"></span>
+            </div>
+            <button id="submitButton" class="primary-button" type="button">번역</button>
+          </footer>
+        </section>
+
+        <section class="side-panel side-panel-right hidden" id="phraseDrawer" aria-label="선호 및 금지 표현 사전">
+          <div class="drawer-header">
+            <strong>표현 사전</strong>
+            <button class="secondary-button" id="addPhraseRule" type="button">항목 추가</button>
+          </div>
+          <div id="phraseRules" class="phrase-rules"></div>
+        </section>
+      </div>
     </main>
 
     <script src="/app.js"></script>

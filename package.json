@@ -1,0 +1,14 @@
+{
+  "name": "local-business-email-translator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Korean-English business email translator powered by the user's Codex CLI auth session.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

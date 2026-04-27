@@ -19,7 +19,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-
+.codex-server.pid
 # Temporary files
 tmp/
 temp/
